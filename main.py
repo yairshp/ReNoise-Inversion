@@ -6,8 +6,6 @@ from diffusers.utils.torch_utils import randn_tensor
 from src.config import RunConfig
 from src.utils.enums_utils import model_type_to_size, is_stochastic
 
-from attention_maps_utils import get_attn_maps_store
-
 
 def create_noise_list(model_type, length, generator=None):
     img_size = model_type_to_size(model_type)

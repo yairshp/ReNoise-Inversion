@@ -22,7 +22,8 @@ from diffusers.models.attention_processor import (
 logger = logging.get_logger(__name__)
 
 
-attn_maps = {}
+# attn_maps = {}
+attn_maps = []
 
 
 @dataclass
@@ -567,8 +568,8 @@ def hook_fn(name):
     def forward_hook(module, input, output):
         if hasattr(module.processor, "attn_map"):
             # attn_maps[name] = module.processor.attn_map
-            attn_maps[name] = (
-                attn_maps.get(name, torch.zeros_like(module.processor.attn_map))
+            attn_maps[-1][name] = (
+                attn_maps[-1].get(name, torch.zeros_like(module.processor.attn_map))
                 + module.processor.attn_map
             )
             del module.processor.attn_map
@@ -627,10 +628,10 @@ def prompt2tokens(tokenizer, prompt):
     return tokens
 
 
-def preprocess(max_height=256, max_width=256):
+def preprocess(timestep_attn_maps, max_height=256, max_width=256):
     # max_height, max_width = 0, 0
-
-    for k, v in attn_maps.items():
+    preprocessed_attn_maps = {}
+    for k, v in timestep_attn_maps.items():
         v = torch.mean(v.cpu(), axis=0).squeeze(0)
         if len(v.shape) == 3:
             _, h, w = v.shape
@@ -646,15 +647,16 @@ def preprocess(max_height=256, max_width=256):
         ).squeeze(
             0
         )  # (77,64,64)
-        attn_maps[k] = v
+        preprocessed_attn_maps[k] = v
+        # attn_maps[k] = v
 
-    attn_map = torch.stack(list(attn_maps.values()), axis=0)
+    attn_map = torch.stack(list(preprocessed_attn_maps.values()), axis=0)
     attn_map = torch.mean(attn_map, axis=0)
 
     return attn_map
 
 
-def visualize_and_save_attn_map(attn_map, tokenizer, prompt):
+def visualize_and_save_attn_map(attn_map, tokenizer, prompt, token_idx):
     # match with tokens
     tokens = prompt2tokens(tokenizer, prompt)
     bos_token = tokenizer.bos_token
@@ -666,6 +668,8 @@ def visualize_and_save_attn_map(attn_map, tokenizer, prompt):
 
     # to_pil = transforms.ToPILImage()
     for i, (token, token_attn_map) in enumerate(zip(tokens, attn_map)):
+        if i != token_idx:
+            continue
         if token == bos_token:
             continue
         if token == eos_token:
@@ -685,7 +689,8 @@ def visualize_and_save_attn_map(attn_map, tokenizer, prompt):
         )
         normalized_token_attn_map = normalized_token_attn_map.astype(np.uint8)
         image = Image.fromarray(normalized_token_attn_map)
-        image.save(os.path.join(save_path, token))
+        # image.save(os.path.join(save_path, token))
+        return image
 
 
 def get_attn_maps():

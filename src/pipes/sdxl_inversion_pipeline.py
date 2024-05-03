@@ -6,7 +6,7 @@ from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import (
     StableDiffusionXLPipelineOutput,
     retrieve_timesteps,
-    PipelineImageInput
+    PipelineImageInput,
 )
 
 from src.renoise_inversion import inversion_step
@@ -52,6 +52,7 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         num_renoise_steps: int = 100,
+        # attention_store=None,
         **kwargs,
     ):
         callback = kwargs.pop("callback", None)
@@ -103,7 +104,9 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
 
         # 3. Encode input prompt
         text_encoder_lora_scale = (
-            self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None
+            self.cross_attention_kwargs.get("scale", None)
+            if self.cross_attention_kwargs is not None
+            else None
         )
         (
             prompt_embeds,
@@ -133,8 +136,10 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
         def denoising_value_valid(dnv):
             return isinstance(self.denoising_end, float) and 0 < dnv < 1
 
-        timesteps, num_inversion_steps = retrieve_timesteps(self.scheduler, num_inversion_steps, device, timesteps)
-        
+        timesteps, num_inversion_steps = retrieve_timesteps(
+            self.scheduler, num_inversion_steps, device, timesteps
+        )
+
         timesteps, num_inversion_steps = self.get_timesteps(
             num_inversion_steps,
             strength,
@@ -192,8 +197,12 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
 
         if self.do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-            add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
-            add_neg_time_ids = add_neg_time_ids.repeat(batch_size * num_images_per_prompt, 1)
+            add_text_embeds = torch.cat(
+                [negative_pooled_prompt_embeds, add_text_embeds], dim=0
+            )
+            add_neg_time_ids = add_neg_time_ids.repeat(
+                batch_size * num_images_per_prompt, 1
+            )
             add_time_ids = torch.cat([add_neg_time_ids, add_time_ids], dim=0)
 
         prompt_embeds = prompt_embeds.to(device)
@@ -201,34 +210,48 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
         add_time_ids = add_time_ids.to(device)
 
         if ip_adapter_image is not None:
-            image_embeds, negative_image_embeds = self.encode_image(ip_adapter_image, device, num_images_per_prompt)
+            image_embeds, negative_image_embeds = self.encode_image(
+                ip_adapter_image, device, num_images_per_prompt
+            )
             if self.do_classifier_free_guidance:
                 image_embeds = torch.cat([negative_image_embeds, image_embeds])
                 image_embeds = image_embeds.to(device)
 
         # 9. Denoising loop
-        num_warmup_steps = max(len(timesteps) - num_inversion_steps * self.scheduler.order, 0)
+        num_warmup_steps = max(
+            len(timesteps) - num_inversion_steps * self.scheduler.order, 0
+        )
 
         self._num_timesteps = len(timesteps)
         self.z_0 = torch.clone(latents)
-        self.noise = randn_tensor(self.z_0.shape, generator=generator, device=self.z_0.device, dtype=self.z_0.dtype)
+        self.noise = randn_tensor(
+            self.z_0.shape,
+            generator=generator,
+            device=self.z_0.device,
+            dtype=self.z_0.dtype,
+        )
 
         all_latents = [latents.clone()]
         with self.progress_bar(total=num_inversion_steps) as progress_bar:
             for i, t in enumerate(reversed(timesteps)):
 
-                added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+                added_cond_kwargs = {
+                    "text_embeds": add_text_embeds,
+                    "time_ids": add_time_ids,
+                }
                 if ip_adapter_image is not None:
                     added_cond_kwargs["image_embeds"] = image_embeds
 
-                latents = inversion_step(self,
-                                       latents,
-                                       t,
-                                       prompt_embeds,
-                                       added_cond_kwargs,
-                                       num_renoise_steps=num_renoise_steps,
-                                       generator=generator)
-                    
+                latents = inversion_step(
+                    self,
+                    latents,
+                    t,
+                    prompt_embeds,
+                    added_cond_kwargs,
+                    num_renoise_steps=num_renoise_steps,
+                    generator=generator,
+                )
+
                 all_latents.append(latents.clone())
 
                 if callback_on_step_end is not None:
@@ -239,16 +262,24 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
 
                     latents = callback_outputs.pop("latents", latents)
                     prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
-                    negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
-                    add_text_embeds = callback_outputs.pop("add_text_embeds", add_text_embeds)
+                    negative_prompt_embeds = callback_outputs.pop(
+                        "negative_prompt_embeds", negative_prompt_embeds
+                    )
+                    add_text_embeds = callback_outputs.pop(
+                        "add_text_embeds", add_text_embeds
+                    )
                     negative_pooled_prompt_embeds = callback_outputs.pop(
                         "negative_pooled_prompt_embeds", negative_pooled_prompt_embeds
                     )
                     add_time_ids = callback_outputs.pop("add_time_ids", add_time_ids)
-                    add_neg_time_ids = callback_outputs.pop("add_neg_time_ids", add_neg_time_ids)
+                    add_neg_time_ids = callback_outputs.pop(
+                        "add_neg_time_ids", add_neg_time_ids
+                    )
 
                 # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                if i == len(timesteps) - 1 or (
+                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
+                ):
                     progress_bar.update()
                     if callback is not None and i % callback_steps == 0:
                         step_idx = i // getattr(self.scheduler, "order", 1)

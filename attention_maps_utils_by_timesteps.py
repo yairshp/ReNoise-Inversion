@@ -656,7 +656,7 @@ def preprocess(timestep_attn_maps, max_height=256, max_width=256):
     return attn_map
 
 
-def visualize_and_save_attn_map(attn_map, tokenizer, prompt, token_idx):
+def visualize_and_save_attn_map(attn_map, tokenizer, prompt, object):
     # match with tokens
     tokens = prompt2tokens(tokenizer, prompt)
     bos_token = tokenizer.bos_token
@@ -668,12 +668,12 @@ def visualize_and_save_attn_map(attn_map, tokenizer, prompt, token_idx):
 
     # to_pil = transforms.ToPILImage()
     for i, (token, token_attn_map) in enumerate(zip(tokens, attn_map)):
-        if i != token_idx:
-            continue
         if token == bos_token:
             continue
         if token == eos_token:
             break
+        if object not in token:
+            continue
         token = token.replace("</w>", "")
         token = f"{i}_<{token}>.jpg"
 

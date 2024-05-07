@@ -1,4 +1,3 @@
-
 import torch
 from diffusers import StableDiffusionImg2ImgPipeline, StableDiffusionXLImg2ImgPipeline
 
@@ -8,7 +7,12 @@ from src.schedulers.lcm_scheduler import MyLCMScheduler
 from src.schedulers.ddim_scheduler import MyDDIMScheduler
 from src.pipes.sdxl_inversion_pipeline import SDXLDDIMPipeline
 from src.pipes.sd_inversion_pipeline import SDDDIMPipeline
-    
+
+from stable_diffusion_xl_img2img_mask_edit import (
+    StableDiffusionXLImg2ImgMaskEditPipeline,
+)
+
+
 def scheduler_type_to_class(scheduler_type):
     if scheduler_type == Scheduler_Type.DDIM:
         return MyDDIMScheduler
@@ -19,6 +23,7 @@ def scheduler_type_to_class(scheduler_type):
     else:
         raise ValueError("Unknown scheduler type")
 
+
 def is_stochastic(scheduler_type):
     if scheduler_type == Scheduler_Type.DDIM:
         return False
@@ -28,11 +33,14 @@ def is_stochastic(scheduler_type):
         return True
     else:
         raise ValueError("Unknown scheduler type")
-    
-def model_type_to_class(model_type):
+
+
+def model_type_to_class(model_type, is_mask_edit=False):
     if model_type == Model_Type.SDXL:
         return StableDiffusionXLImg2ImgPipeline, SDXLDDIMPipeline
     elif model_type == Model_Type.SDXL_Turbo:
+        if is_mask_edit:
+            return StableDiffusionXLImg2ImgMaskEditPipeline, SDXLDDIMPipeline
         return StableDiffusionXLImg2ImgPipeline, SDXLDDIMPipeline
     elif model_type == Model_Type.LCM_SDXL:
         return StableDiffusionXLImg2ImgPipeline, SDXLDDIMPipeline
@@ -46,7 +54,8 @@ def model_type_to_class(model_type):
         return StableDiffusionImg2ImgPipeline, SDDDIMPipeline
     else:
         raise ValueError("Unknown model type")
-    
+
+
 def model_type_to_model_name(model_type):
     if model_type == Model_Type.SDXL:
         return "stabilityai/stable-diffusion-xl-base-1.0"
@@ -65,14 +74,14 @@ def model_type_to_model_name(model_type):
     else:
         raise ValueError("Unknown model type")
 
-    
+
 def model_type_to_size(model_type):
     if model_type == Model_Type.SDXL:
         return (1024, 1024)
     elif model_type == Model_Type.SDXL_Turbo:
         return (512, 512)
     elif model_type == Model_Type.LCM_SDXL:
-        return (768, 768) #TODO: check
+        return (768, 768)  # TODO: check
     elif model_type == Model_Type.SD15:
         return (512, 512)
     elif model_type == Model_Type.SD14:
@@ -83,7 +92,8 @@ def model_type_to_size(model_type):
         return (512, 512)
     else:
         raise ValueError("Unknown model type")
-    
+
+
 def is_float16(model_type):
     if model_type == Model_Type.SDXL:
         return True
@@ -101,7 +111,8 @@ def is_float16(model_type):
         return False
     else:
         raise ValueError("Unknown model type")
-    
+
+
 def is_sd(model_type):
     if model_type == Model_Type.SDXL:
         return False
@@ -119,41 +130,49 @@ def is_sd(model_type):
         return True
     else:
         raise ValueError("Unknown model type")
-    
-def _get_pipes(model_type, device):
+
+
+def _get_pipes(model_type, device, is_mask_edit=False):
     model_name = model_type_to_model_name(model_type)
-    pipeline_inf, pipeline_inv = model_type_to_class(model_type)
+    pipeline_inf, pipeline_inv = model_type_to_class(model_type, is_mask_edit)
 
     if is_float16(model_type):
         pipe_inference = pipeline_inf.from_pretrained(
-                model_name,
-                torch_dtype=torch.float16,
-                use_safetensors=True,
-                variant="fp16",
-                safety_checker = None
-            ).to(device)
+            model_name,
+            torch_dtype=torch.float16,
+            use_safetensors=True,
+            variant="fp16",
+            safety_checker=None,
+        ).to(device)
     else:
         pipe_inference = pipeline_inf.from_pretrained(
-                model_name,
-                use_safetensors=True,
-                safety_checker = None
-            ).to(device)
+            model_name, use_safetensors=True, safety_checker=None
+        ).to(device)
 
-    pipe_inversion = pipeline_inv(**pipe_inference.components)   
-    
+    pipe_inversion = pipeline_inv(**pipe_inference.components)
+
     return pipe_inversion, pipe_inference
-    
-def get_pipes(model_type, scheduler_type, device="cuda"):
+
+
+def get_pipes(model_type, scheduler_type, device="cuda", is_mask_edit=False):
     scheduler_class = scheduler_type_to_class(scheduler_type)
 
-    pipe_inversion, pipe_inference = _get_pipes(model_type, device)
-    
-    pipe_inference.scheduler = scheduler_class.from_config(pipe_inference.scheduler.config)
-    pipe_inversion.scheduler = scheduler_class.from_config(pipe_inversion.scheduler.config)
+    pipe_inversion, pipe_inference = _get_pipes(model_type, device, is_mask_edit)
+
+    pipe_inference.scheduler = scheduler_class.from_config(
+        pipe_inference.scheduler.config
+    )
+    pipe_inversion.scheduler = scheduler_class.from_config(
+        pipe_inversion.scheduler.config
+    )
 
     if is_sd(model_type):
-        pipe_inference.scheduler.add_noise = lambda init_latents, noise, timestep: init_latents
-        pipe_inversion.scheduler.add_noise = lambda init_latents, noise, timestep: init_latents
+        pipe_inference.scheduler.add_noise = (
+            lambda init_latents, noise, timestep: init_latents
+        )
+        pipe_inversion.scheduler.add_noise = (
+            lambda init_latents, noise, timestep: init_latents
+        )
 
     if model_type == Model_Type.LCM_SDXL:
         adapter_id = "latent-consistency/lcm-lora-sdxl"

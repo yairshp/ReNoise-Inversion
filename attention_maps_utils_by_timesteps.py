@@ -656,7 +656,7 @@ def preprocess(timestep_attn_maps, max_height=256, max_width=256):
     return attn_map
 
 
-def visualize_and_save_attn_map(attn_map, tokenizer, prompt, object):
+def visualize_and_save_attn_map(attn_map, tokenizer, prompt, object_name=None):
     # match with tokens
     tokens = prompt2tokens(tokenizer, prompt)
     bos_token = tokenizer.bos_token
@@ -672,7 +672,7 @@ def visualize_and_save_attn_map(attn_map, tokenizer, prompt, object):
             continue
         if token == eos_token:
             break
-        if object not in token:
+        if object_name is not None and object_name not in token:
             continue
         token = token.replace("</w>", "")
         token = f"{i}_<{token}>.jpg"

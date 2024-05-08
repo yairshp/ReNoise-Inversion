@@ -11,6 +11,9 @@ from src.pipes.sd_inversion_pipeline import SDDDIMPipeline
 from stable_diffusion_xl_img2img_mask_edit import (
     StableDiffusionXLImg2ImgMaskEditPipeline,
 )
+from stable_diffusion_xl_img2img_optimize_z import (
+    StableDiffusionXLImg2ImgOptimizeZPipeline,
+)
 
 
 def scheduler_type_to_class(scheduler_type):
@@ -35,12 +38,14 @@ def is_stochastic(scheduler_type):
         raise ValueError("Unknown scheduler type")
 
 
-def model_type_to_class(model_type, is_mask_edit=False):
+def model_type_to_class(model_type, is_mask_edit=False, is_optimize_z=False):
     if model_type == Model_Type.SDXL:
         return StableDiffusionXLImg2ImgPipeline, SDXLDDIMPipeline
     elif model_type == Model_Type.SDXL_Turbo:
         if is_mask_edit:
             return StableDiffusionXLImg2ImgMaskEditPipeline, SDXLDDIMPipeline
+        if is_optimize_z:
+            return StableDiffusionXLImg2ImgOptimizeZPipeline, SDXLDDIMPipeline
         return StableDiffusionXLImg2ImgPipeline, SDXLDDIMPipeline
     elif model_type == Model_Type.LCM_SDXL:
         return StableDiffusionXLImg2ImgPipeline, SDXLDDIMPipeline
@@ -132,9 +137,11 @@ def is_sd(model_type):
         raise ValueError("Unknown model type")
 
 
-def _get_pipes(model_type, device, is_mask_edit=False):
+def _get_pipes(model_type, device, is_mask_edit=False, is_optimize_z=False):
     model_name = model_type_to_model_name(model_type)
-    pipeline_inf, pipeline_inv = model_type_to_class(model_type, is_mask_edit)
+    pipeline_inf, pipeline_inv = model_type_to_class(
+        model_type, is_mask_edit, is_optimize_z
+    )
 
     if is_float16(model_type):
         pipe_inference = pipeline_inf.from_pretrained(
@@ -154,10 +161,14 @@ def _get_pipes(model_type, device, is_mask_edit=False):
     return pipe_inversion, pipe_inference
 
 
-def get_pipes(model_type, scheduler_type, device="cuda", is_mask_edit=False):
+def get_pipes(
+    model_type, scheduler_type, device="cuda", is_mask_edit=False, is_optimize_z=False
+):
     scheduler_class = scheduler_type_to_class(scheduler_type)
 
-    pipe_inversion, pipe_inference = _get_pipes(model_type, device, is_mask_edit)
+    pipe_inversion, pipe_inference = _get_pipes(
+        model_type, device, is_mask_edit, is_optimize_z
+    )
 
     pipe_inference.scheduler = scheduler_class.from_config(
         pipe_inference.scheduler.config

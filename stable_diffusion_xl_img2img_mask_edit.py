@@ -1338,7 +1338,13 @@ class StableDiffusionXLImg2ImgMaskEditPipeline(
             add_noise,
         )
 
-        mask_image = mask_image * mask_weight
+        # mask_image_top_value = torch.quantile(mask_image.float(), 0.8)
+        # mask_image[mask_image > mask_image_top_value] = 1
+        # mask_image[mask_image <= mask_image_top_value] = 0
+        # mask_image = mask_image * mask_weight
+        mask_image = (mask_image - mask_image.min()) / (
+            mask_image.max() - mask_image.min()
+        )
         latent_height, latent_width = mask_image.shape[-2:]
 
         if isinstance(image_latents, list) and any(
@@ -1494,8 +1500,8 @@ class StableDiffusionXLImg2ImgMaskEditPipeline(
                     added_cond_kwargs["image_embeds"] = image_embeds
 
                 # #! attention maps per timestep
-                # attn_maps = get_attn_maps()
-                # attn_maps.append({})
+                attn_maps = get_attn_maps()
+                attn_maps.append({})
 
                 noise_pred = self.unet(
                     latent_model_input,

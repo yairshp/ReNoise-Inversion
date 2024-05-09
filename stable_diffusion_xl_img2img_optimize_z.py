@@ -56,6 +56,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.stable_diffusion_xl.pipeline_output import (
     StableDiffusionXLPipelineOutput,
 )
+import torch.distributions as dist
 
 
 if is_invisible_watermark_available():
@@ -1036,6 +1037,79 @@ class StableDiffusionXLImg2ImgOptimizeZPipeline(
     def num_timesteps(self):
         return self._num_timesteps
 
+    def _latents_step(
+        self,
+        latents,
+        t,
+        prompt_embeds,
+        general_attn_map,
+        step_size,
+        added_cond_kwargs,
+        cross_attention_kwargs,
+    ):
+        noise_pred_next = self.unet(
+            latents,
+            t,
+            encoder_hidden_states=prompt_embeds,
+            # encoder_hidden_states=prompt_embeds[1].unsqueeze(0),
+            added_cond_kwargs=added_cond_kwargs,
+            cross_attention_kwargs=cross_attention_kwargs,
+        ).sample
+        self.unet.zero_grad()
+
+        curr_attn_maps = get_attn_maps()[-1]
+        # preprocessed_attn_maps = preprocess(curr_attn_maps[-1], 64, 64)
+        aggregated_attn_maps = []
+        for k, v in curr_attn_maps.items():
+            if v.shape[-1] != 16:
+                continue
+            v = torch.mean(v, axis=0).squeeze(0)
+            aggregated_attn_maps.append(v)
+        aggregated_attn_maps = torch.stack(aggregated_attn_maps, axis=0)
+        aggregated_attn_maps = torch.mean(aggregated_attn_maps, axis=0)
+        object_attn_map = aggregated_attn_maps[5]  # TODO make it more robust
+
+        object_max_attn = object_attn_map.max()
+        attend_and_excite_loss = max(0, 1.0 - object_max_attn)
+
+        object_attn_map_clone = object_attn_map.clone()
+        object_attn_map_clone = object_attn_map_clone.reshape(-1)
+        object_attn_map_clone = (
+            object_attn_map_clone - object_attn_map_clone.min()
+        ) / (object_attn_map_clone.max() - object_attn_map_clone.min())
+        object_attn_map_clone = torch.softmax(object_attn_map_clone, dim=0)
+        general_attn_map_clone = general_attn_map.clone()
+        general_attn_map_clone = general_attn_map_clone.reshape(-1)
+        general_attn_map_clone = (
+            general_attn_map_clone - general_attn_map_clone.min()
+        ) / (general_attn_map_clone.max() - general_attn_map_clone.min())
+        general_attn_map_clone = torch.softmax(general_attn_map_clone, dim=0)
+
+        p = dist.Categorical(probs=object_attn_map_clone)
+        q = dist.Categorical(probs=general_attn_map_clone)
+
+        kl_divergence_pq = dist.kl_divergence(p, q)
+        kl_divergence_qp = dist.kl_divergence(q, p)
+
+        avg_kl_divergence = (kl_divergence_pq + kl_divergence_qp) / 2
+        segregation_loss = -avg_kl_divergence
+
+        loss = 0 * attend_and_excite_loss + 1 * segregation_loss
+
+        grad_cond = torch.autograd.grad(
+            loss.requires_grad_(True), [latents], retain_graph=True
+        )[0]
+        latents = latents - step_size * grad_cond
+
+        attn_maps = get_attn_maps()
+        # attn_maps.append({})
+        attn_maps[-1] = {}
+
+        del noise_pred_next
+        torch.cuda.empty_cache()
+
+        return latents, segregation_loss, attend_and_excite_loss
+
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
@@ -1044,6 +1118,7 @@ class StableDiffusionXLImg2ImgOptimizeZPipeline(
         prompt_2: Optional[Union[str, List[str]]] = None,
         image: PipelineImageInput = None,
         general_attn_map: torch.Tensor = None,
+        grad_step_size: float = 0.01,
         strength: float = 0.3,
         num_inference_steps: int = 50,
         timesteps: List[int] = None,
@@ -1451,36 +1526,115 @@ class StableDiffusionXLImg2ImgOptimizeZPipeline(
                 with torch.enable_grad():
                     latents = latents.clone().detach().requires_grad_(True)
 
-                    noise_pred_next = self.unet(
-                        latents,
-                        t,
-                        encoder_hidden_states=prompt_embeds,
-                        # encoder_hidden_states=prompt_embeds[1].unsqueeze(0),
-                        added_cond_kwargs=added_cond_kwargs,
-                        cross_attention_kwargs=cross_attention_kwargs,
-                    ).sample
-                    self.unet.zero_grad()
-
-                    curr_attn_maps = get_attn_maps()[-1]
-                    # preprocessed_attn_maps = preprocess(curr_attn_maps[-1], 64, 64)
-                    aggregated_attn_maps = []
-                    for k, v in curr_attn_maps.items():
-                        if v.shape[-1] != 16:
-                            continue
-                        v = torch.mean(v, axis=0).squeeze(0)
-                        aggregated_attn_maps.append(v)
-                    aggregated_attn_maps = torch.stack(aggregated_attn_maps, axis=0)
-                    aggregated_attn_maps = torch.mean(aggregated_attn_maps, axis=0)
-                    object_attn_map = aggregated_attn_maps[5]
-                    loss = torch.nn.functional.mse_loss(
-                        object_attn_map, general_attn_map
+                    latents, segregation_loss, attend_and_excite_loss = (
+                        self._latents_step(
+                            latents,
+                            t,
+                            prompt_embeds,
+                            general_attn_map,
+                            grad_step_size,
+                            added_cond_kwargs,
+                            cross_attention_kwargs,
+                        )
                     )
 
-                    grad_cond = torch.autograd.grad(
-                        loss.requires_grad_(True), [latents], retain_graph=True
-                    )[0]
-                    latents = latents - 0.1 * grad_cond
-                    # latents = latents - step_size * grad_cond
+                    num_iterations = 0
+
+                    while segregation_loss > -0.05 * (i + 1) and num_iterations <= 50:
+                        latents, segregation_loss, attend_and_excite_loss = (
+                            self._latents_step(
+                                latents,
+                                t,
+                                prompt_embeds,
+                                general_attn_map,
+                                grad_step_size,
+                                added_cond_kwargs,
+                                cross_attention_kwargs,
+                            )
+                        )
+                        num_iterations += 1
+
+                    print(
+                        f"Timestep ended with loss of - {segregation_loss} (threshold was {-0.05 * (i + 1)})"
+                    )
+                    # noise_pred_next = self.unet(
+                    #     latents,
+                    #     t,
+                    #     encoder_hidden_states=prompt_embeds,
+                    #     # encoder_hidden_states=prompt_embeds[1].unsqueeze(0),
+                    #     added_cond_kwargs=added_cond_kwargs,
+                    #     cross_attention_kwargs=cross_attention_kwargs,
+                    # ).sample
+                    # self.unet.zero_grad()
+
+                    # curr_attn_maps = get_attn_maps()[-1]
+                    # # preprocessed_attn_maps = preprocess(curr_attn_maps[-1], 64, 64)
+                    # aggregated_attn_maps = []
+                    # for k, v in curr_attn_maps.items():
+                    #     if v.shape[-1] != 16:
+                    #         continue
+                    #     v = torch.mean(v, axis=0).squeeze(0)
+                    #     aggregated_attn_maps.append(v)
+                    # aggregated_attn_maps = torch.stack(aggregated_attn_maps, axis=0)
+                    # aggregated_attn_maps = torch.mean(aggregated_attn_maps, axis=0)
+                    # object_attn_map = aggregated_attn_maps[
+                    #     5
+                    # ]  # TODO make it more robust
+
+                    # object_max_attn = object_attn_map.max()
+                    # attend_and_excite_loss = max(0, 1.0 - object_max_attn)
+
+                    # object_attn_map_clone = object_attn_map.clone()
+                    # object_attn_map_clone = object_attn_map_clone.reshape(-1)
+                    # object_attn_map_clone = (
+                    #     object_attn_map_clone - object_attn_map_clone.min()
+                    # ) / (object_attn_map_clone.max() - object_attn_map_clone.min())
+                    # object_attn_map_clone = torch.softmax(object_attn_map_clone, dim=0)
+                    # general_attn_map_clone = general_attn_map.clone()
+                    # general_attn_map_clone = general_attn_map_clone.reshape(-1)
+                    # general_attn_map_clone = (
+                    #     general_attn_map_clone - general_attn_map_clone.min()
+                    # ) / (general_attn_map_clone.max() - general_attn_map_clone.min())
+                    # general_attn_map_clone = torch.softmax(
+                    #     general_attn_map_clone, dim=0
+                    # )
+
+                    # p = dist.Categorical(probs=object_attn_map_clone)
+                    # q = dist.Categorical(probs=general_attn_map_clone)
+
+                    # kl_divergence_pq = dist.kl_divergence(p, q)
+                    # kl_divergence_qp = dist.kl_divergence(q, p)
+
+                    # avg_kl_divergence = (kl_divergence_pq + kl_divergence_qp) / 2
+                    # segregation_loss = -avg_kl_divergence
+
+                    # # object_top_attn_value = torch.quantile(object_attn_map.float(), 0.8)
+                    # # object_top_attn_mask = torch.zeros_like(object_attn_map)
+                    # # object_top_attn_mask[object_attn_map >= object_top_attn_value] = 1
+                    # # object_attn_map_clone[
+                    # #     object_attn_map_clone >= object_top_attn_value
+                    # # ] = 1.0
+                    # # object_attn_map_clone[
+                    # #     object_attn_map_clone < object_top_attn_value
+                    # # ] = 0
+
+                    # # general_top_attn_value = torch.quantile(
+                    # #     general_attn_map.float(), 0.8
+                    # # )
+                    # # general_top_attn_mask = torch.zeros_like(general_attn_map)
+                    # # general_top_attn_mask[
+                    # #     general_attn_map >= general_top_attn_value
+                    # # ] = 1.0
+                    # # union_matrix = general_top_attn_mask * object_attn_map_clone
+                    # # segregation_loss = union_matrix.sum() / torch.numel(union_matrix)
+
+                    # loss = 1 * attend_and_excite_loss + 20 * segregation_loss
+
+                    # grad_cond = torch.autograd.grad(
+                    #     loss.requires_grad_(True), [latents], retain_graph=True
+                    # )[0]
+                    # latents = latents - grad_step_size * grad_cond
+                    # # latents = latents - step_size * grad_cond
 
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = (

@@ -2,3 +2,6 @@
 .vscode/
 .ipynb_checkpoints/
 attn_maps
+example_images/generated*/
+example_images/mini_benchmark/
+*.jpg

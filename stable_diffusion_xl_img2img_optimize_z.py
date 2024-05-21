@@ -1540,7 +1540,7 @@ class StableDiffusionXLImg2ImgOptimizeZPipeline(
 
                     num_iterations = 0
 
-                    while segregation_loss > -0.05 * (i + 1) and num_iterations <= 50:
+                    while segregation_loss > -0.05 * (i + 1) and num_iterations <= 30:
                         latents, segregation_loss, attend_and_excite_loss = (
                             self._latents_step(
                                 latents,

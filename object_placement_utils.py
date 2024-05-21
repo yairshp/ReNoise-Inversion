@@ -13,6 +13,21 @@ from attention_maps_utils_by_timesteps import (
     visualize_and_save_attn_map,
 )
 
+MINI_BENCHMARK_OBJECT_NAMES = [
+    "backpack",
+    "flag",
+    "picnic table",
+    "dog",
+    "bus",
+    "picnic box",
+    "plane",
+    "bird",
+    "bird",
+    "car",
+    "cat",
+    "chair",
+]
+
 
 def get_llava_model_and_processor(device: str = "cuda"):
     llava_model = LlavaForConditionalGeneration.from_pretrained(
@@ -26,7 +41,17 @@ def get_generated_bg_images_and_prompts(images_dir: str):
     images_paths = os.listdir(images_dir)
     prompts = [p.split(".")[0] for p in images_paths]
     bg_images_paths = [f"{images_dir}/{p}" for p in images_paths]
-    return bg_images_paths, prompts
+    bg_images = [preprocess_image(p) for p in bg_images_paths]
+    return bg_images, prompts
+
+
+def get_object_names(images_dir):
+    dir_basename = os.path.basename(images_dir)
+    if dir_basename == "mini_benchmark":
+        object_names = MINI_BENCHMARK_OBJECT_NAMES
+    else:
+        raise ValueError(f"Unknown directory name: {dir_basename}")
+    return object_names
 
 
 def preprocess_image(image_path):
@@ -50,7 +75,7 @@ def get_edit_prompts(
             query = query_format.format(object_name=object_names)
             queries.append(query)
     else:
-        for original_prompt, object_name in zip(images, original_prompts, object_names):
+        for original_prompt, object_name in zip(original_prompts, object_names):
             query = query_format.format(
                 original_prompt=original_prompt, object_name=object_name
             )
@@ -66,33 +91,33 @@ def get_edit_prompts(
     return edit_prompts
 
 
-def get_prompts(processor, model, images, object_names=None, device="cuda"):
-    if object_names is None:
-        propmt = "USER: <image>\nWhat's in the image (answer in shortest way possible)? ASSISTANT:"
-        prompts = [propmt for _ in range(len(images))]
-    else:
-        prompts = [
-            f"USER: <image>\nWhat's in the image that a {ref} can be on (answer in shortest way possible)? ASSISTANT:"
-            for ref in object_names
-        ]
-    answers = []
-    for prompt, image in zip(prompts, images):
-        inputs = processor(text=prompt, images=image, return_tensors="pt").to(device)
-        generate_ids = model.generate(**inputs, max_new_tokens=15)
-        answer = processor.batch_decode(
-            generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
-        )[0]
-        # the answer should be the string after the last colon
-        answer = answer.split(":")[-1].strip()
-        answers.append(answer)
-    return answers
+# def get_prompts(processor, model, images, object_names=None, device="cuda"):
+#     if object_names is None:
+#         propmt = "USER: <image>\nWhat's in the image (answer in shortest way possible)? ASSISTANT:"
+#         prompts = [propmt for _ in range(len(images))]
+#     else:
+#         prompts = [
+#             f"USER: <image>\nWhat's in the image that a {ref} can be on (answer in shortest way possible)? ASSISTANT:"
+#             for ref in object_names
+#         ]
+#     answers = []
+#     for prompt, image in zip(prompts, images):
+#         inputs = processor(text=prompt, images=image, return_tensors="pt").to(device)
+#         generate_ids = model.generate(**inputs, max_new_tokens=15)
+#         answer = processor.batch_decode(
+#             generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+#         )[0]
+#         # the answer should be the string after the last colon
+#         answer = answer.split(":")[-1].strip()
+#         answers.append(answer)
+#     return answers
 
 
-def get_edit_prompts(inversion_prompts, objects):
-    edit_prompts = []
-    for inversion_prompt, object in zip(inversion_prompts, objects):
-        edit_prompts.append(f"a {inversion_prompt} and a {object}".lower())
-    return edit_prompts
+# def get_edit_prompts(inversion_prompts, objects):
+#     edit_prompts = []
+#     for inversion_prompt, object in zip(inversion_prompts, objects):
+#         edit_prompts.append(f"a {inversion_prompt} and a {object}".lower())
+#     return edit_prompts
 
 
 def invert_images(config, pipe_inversion, pipe_inference, images, prompts):
@@ -119,11 +144,21 @@ def set_pipe_for_cross_attn_logging(pipe_inference):
     return pipe_inference
 
 
-def get_attn_map(pipe_inference, edit_prompt):
+# def get_attn_map(pipe_inference, edit_prompt):
+#     attn_maps = get_attn_maps()
+#     attn_map = preprocess(attn_maps[-1], 512, 512)
+#     attn_map_img = visualize_and_save_attn_map(
+#         attn_map, pipe_inference.tokenizer, edit_prompt, edit_prompt.split()[-1].lower()
+#     )
+#     return attn_map_img
+def get_attn_map(edit_prompt, tokenizer, indices):
     attn_maps = get_attn_maps()
     attn_map = preprocess(attn_maps[-1], 512, 512)
     attn_map_img = visualize_and_save_attn_map(
-        attn_map, pipe_inference.tokenizer, edit_prompt, edit_prompt.split()[-1].lower()
+        attn_map,
+        tokenizer,
+        edit_prompt,
+        indices=indices,
     )
     return attn_map_img
 
@@ -134,7 +169,13 @@ def reset_attn_maps():
 
 
 def get_edit_images_and_attn_maps(
-    config, pipe_inference, inv_latents, noises, inversion_prompts, edit_prompts
+    config,
+    pipe_inference,
+    inv_latents,
+    noises,
+    inversion_prompts,
+    edit_prompts,
+    indices,
 ):
     edit_images = []
     last_timestep_attn_maps = []
@@ -153,7 +194,10 @@ def get_edit_images_and_attn_maps(
             guidance_scale=config.guidance_scale,
         ).images[0]
         edit_images.append(edit_image)
-        last_timestep_attn_maps.append(get_attn_map(edit_prompt))
+        last_timestep_attn_maps.append(
+            get_attn_map(edit_prompt, pipe_inference.tokenizer, indices)
+        )
+        reset_attn_maps()
 
     return edit_images, last_timestep_attn_maps
 

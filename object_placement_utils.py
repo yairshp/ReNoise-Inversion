@@ -2,6 +2,8 @@ import os
 import pprint
 from transformers import AutoProcessor, LlavaForConditionalGeneration
 from PIL import Image
+import matplotlib.pyplot as plt
+from textwrap import wrap
 
 from main import run as invert
 from attention_maps_utils_by_timesteps import (
@@ -216,3 +218,38 @@ def get_indices_to_alter(stable, prompt: str):
     token_indices = [int(i) for i in token_indices.split(",")]
     print(f"Altering tokens: {[token_idx_to_word[i] for i in token_indices]}")
     return token_indices
+
+
+def plot_images_and_prompts(
+    original_images, original_prompts, edit_images, edit_prompts, object_names
+):
+    # Create a figure with the desired number of rows and columns
+    num_images = len(original_images)
+
+    rows = num_images
+    cols = 2  # Two columns for original and edit image pairs
+    fig, axs = plt.subplots(rows, cols, figsize=(10, rows * 4), constrained_layout=True)
+
+    # Iterate over the lists and plot each image pair in a row
+    for i in range(num_images):
+
+        # Load and display the original image
+        axs[i, 0].imshow(original_images[i])
+        axs[i, 0].set_title("\n".join(wrap(original_prompts[i], 40)), fontsize=10)
+        axs[i, 0].axis("off")
+
+        # Load and display the edit image
+        wrapped_prompt = "\n".join(wrap(edit_prompts[i], 40))
+        bold_object_name = r"$\bf{" + object_names[i].replace(" ", "\ ") + "}$"
+        axs[i, 1].imshow(edit_images[i])
+        axs[i, 1].set_title(
+            wrapped_prompt.replace(object_names[i], bold_object_name), fontsize=10
+        )
+        # axs[i, 1].set_title('\n'.join(wrap(edit_prompts[i], 30)), fontsize=10)
+        axs[i, 1].axis("off")
+
+    # Adjust spacing between subplots
+    plt.subplots_adjust(wspace=0.1, hspace=0.4)
+
+    # Display the plot
+    plt.show()

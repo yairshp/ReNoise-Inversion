@@ -5,3 +5,4 @@ attn_maps
 example_images/generated*/
 example_images/mini_benchmark/
 *.jpg
+example_images/attend_and_excite/

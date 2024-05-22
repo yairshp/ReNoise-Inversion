@@ -25,8 +25,8 @@ config = RunConfig(
     scheduler_type=scheduler_type,
     perform_noise_correction=False,
     seed=7865,
-    noise_regularization_lambda_kl=0.08,
-    noise_regularization_lambda_ac=30,
+    # noise_regularization_lambda_kl=0.08,
+    # noise_regularization_lambda_ac=30,
 )
 
 _, inv_latent, _, all_latents = invert(
@@ -44,7 +44,7 @@ rec_image = pipe_inference(
     prompt="a tiger in the field",
     denoising_start=0.0,
     num_inference_steps=config.num_inference_steps,
-    guidance_scale=1.0,
+    guidance_scale=2.0,
 ).images[0]
 
 rec_image.save("tiger_edited_sdxl.jpg")

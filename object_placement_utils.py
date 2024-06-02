@@ -58,9 +58,9 @@ def get_object_names(images_dir):
     return object_names
 
 
-def preprocess_image(image_path):
+def preprocess_image(image_path, res=1024):
     image = Image.open(image_path)
-    return image.convert("RGB").resize((1024, 1024))
+    return image.convert("RGB").resize((res, res))
 
 
 def get_edit_prompts(

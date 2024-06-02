@@ -1,0 +1,7 @@
+.vscode/
+__pycache__/
+example_images/mini_benchmark
+data/mini_benchmark
+*.jpg
+*.jpeg
+wandb/
